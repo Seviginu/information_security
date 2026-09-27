@@ -1,0 +1,205 @@
+# IntelliJ IDEA HTTP Client: запустите приложение, затем запросы сверху вниз.
+# Значения login/password должны совпадать с APP_LOGIN/APP_PASSWORD приложения.
+# После перезапуска приложения повторите запрос входа (№ 2).
+@baseUrl = http://127.0.0.1:18081
+@login = student
+@password = Local-demo-password-123!
+
+### 1. Чтение без токена — 401
+GET {{baseUrl}}/api/data
+Accept: application/json
+
+> {%
+    client.test("Without token: 401", function () {
+        client.assert(response.status === 401);
+    });
+%}
+
+### 2. Вход — 200; JWT автоматически сохраняется в ibLabToken
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+Accept: application/json
+
+{
+  "login": "{{login}}",
+  "password": "{{password}}"
+}
+
+> {%
+    client.global.clear("ibLabToken");
+    client.test("Login: 200 and JWT", function () {
+        client.assert(response.status === 200);
+        client.assert(response.body.tokenType === "Bearer");
+        client.assert(response.body.expiresIn === 900);
+        client.assert(typeof response.body.accessToken === "string");
+        client.global.set("ibLabToken", response.body.accessToken);
+    });
+%}
+
+### 3. Чтение своих заметок — 200
+GET {{baseUrl}}/api/data
+Authorization: Bearer {{ibLabToken}}
+Accept: application/json
+
+> {%
+    client.test("Read notes: 200", function () {
+        client.assert(response.status === 200);
+        client.assert(Array.isArray(response.body));
+    });
+%}
+
+### 4. Создание заметки — 201
+POST {{baseUrl}}/api/data
+Authorization: Bearer {{ibLabToken}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "content": "Заметка для проверки API"
+}
+
+> {%
+    client.test("Create note: 201", function () {
+        client.assert(response.status === 201);
+        client.assert(typeof response.body.id === "string");
+        client.assert(response.body.content === "Заметка для проверки API");
+        client.global.set("ibLabNoteId", response.body.id);
+    });
+%}
+
+### 5. Проверка сохранения созданной заметки — 200
+GET {{baseUrl}}/api/data
+Authorization: Bearer {{ibLabToken}}
+Accept: application/json
+
+> {%
+    client.test("Created note is returned", function () {
+        client.assert(response.status === 200);
+        client.assert(response.body.some(note => note.id === client.global.get("ibLabNoteId")));
+    });
+%}
+
+### 6. XSS: скрипт возвращается как экранированный текст — 201
+POST {{baseUrl}}/api/data
+Authorization: Bearer {{ibLabToken}}
+Content-Type: application/json
+
+{
+  "content": "<script>alert('xss')</script>"
+}
+
+> {%
+    client.test("XSS is escaped on creation", function () {
+        client.assert(response.status === 201);
+        client.assert(response.body.content === "&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;");
+        client.global.set("ibLabXssId", response.body.id);
+    });
+%}
+
+### 7. XSS: экранирование при чтении — 200
+GET {{baseUrl}}/api/data
+Authorization: Bearer {{ibLabToken}}
+Accept: application/json
+
+> {%
+    client.test("XSS is escaped on reading", function () {
+        client.assert(response.status === 200);
+        const note = response.body.find(item => item.id === client.global.get("ibLabXssId"));
+        client.assert(note !== undefined);
+        client.assert(note.content === "&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;");
+    });
+%}
+
+### 8. Неверный пароль — 401
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "login": "{{login}}",
+  "password": "wrong"
+}
+
+> {%
+    client.test("Wrong password: 401", function () {
+        client.assert(response.status === 401);
+    });
+%}
+
+### 9. SQL-инъекция в логине не даёт войти — 401
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "login": "' OR '1'='1' --",
+  "password": "{{password}}"
+}
+
+> {%
+    client.test("SQL injection cannot authenticate: 401", function () {
+        client.assert(response.status === 401);
+    });
+%}
+
+### 10. Повреждённый токен — 401
+GET {{baseUrl}}/api/data
+Authorization: Bearer invalid-token
+Accept: application/json
+
+> {%
+    client.test("Invalid JWT: 401", function () {
+        client.assert(response.status === 401);
+    });
+%}
+
+### 11. Создание без токена — 401
+POST {{baseUrl}}/api/data
+Content-Type: application/json
+
+{
+  "content": "Эта заметка не должна сохраниться"
+}
+
+> {%
+    client.test("Create without token: 401", function () {
+        client.assert(response.status === 401);
+    });
+%}
+
+### 12. Пустой текст — 400
+POST {{baseUrl}}/api/data
+Authorization: Bearer {{ibLabToken}}
+Content-Type: application/json
+
+{
+  "content": "   "
+}
+
+> {%
+    client.test("Blank note: 400", function () {
+        client.assert(response.status === 400);
+    });
+%}
+
+### 13. Отсутствуют поля входа — 400
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{}
+
+> {%
+    client.test("Missing credentials: 400", function () {
+        client.assert(response.status === 400);
+    });
+%}
+
+### 14. Некорректный JSON — 400
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{"login":
+
+> {%
+    client.test("Malformed JSON: 400", function () {
+        client.assert(response.status === 400);
+    });
+%}

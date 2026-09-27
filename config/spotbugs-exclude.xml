@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FindBugsFilter>
+    <!-- Spring-managed JdbcTemplate is deliberately shared; we do not change its configuration. -->
+    <Match>
+        <Or>
+            <Class name="itmo.auth.UserService"/>
+            <Class name="itmo.data.DataController"/>
+        </Or>
+        <Method name="&lt;init&gt;"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
+    <!-- HttpSecurity.build() itself declares throws Exception. -->
+    <Match>
+        <Class name="itmo.config.SecurityConfig"/>
+        <Method name="securityFilterChain"/>
+        <Bug pattern="THROWS_METHOD_THROWS_CLAUSE_BASIC_EXCEPTION"/>
+    </Match>
+</FindBugsFilter>

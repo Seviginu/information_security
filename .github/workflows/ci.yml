@@ -1,0 +1,59 @@
+name: Java security checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-sast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Build and tests
+        run: mvn -B verify
+      - name: SAST - SpotBugs
+        run: mvn -B spotbugs:spotbugs spotbugs:check -Dspotbugs.htmlOutput=true
+      - name: Upload test and SAST reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-and-sast
+          path: |
+            target/surefire-reports/
+            target/spotbugs*.xml
+            target/reports/
+
+  sca:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: SCA - OWASP Dependency-Check
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          if [ -z "$NVD_API_KEY" ]; then
+            echo "Add repository secret NVD_API_KEY to run Dependency-Check."
+            exit 1
+          fi
+          mvn -B -DskipTests package dependency-check:check
+      - name: Upload SCA reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sca
+          path: target/dependency-check-report.*
