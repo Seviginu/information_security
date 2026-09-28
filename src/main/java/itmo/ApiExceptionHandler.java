@@ -26,6 +26,8 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<Map<String, String>> statusError(ResponseStatusException exception) {
-        return ResponseEntity.status(exception.getStatusCode()).body(Map.of("error", "Некорректный запрос"));
+        String message = exception.getStatusCode().value() == 404
+                ? "Заметка не найдена" : "Некорректный запрос";
+        return ResponseEntity.status(exception.getStatusCode()).body(Map.of("error", message));
     }
 }

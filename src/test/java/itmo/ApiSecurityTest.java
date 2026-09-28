@@ -2,6 +2,7 @@ package itmo;
 
 import java.time.Instant;
 import java.util.Map;
+import java.util.UUID;
 
 import com.jayway.jsonpath.JsonPath;
 import itmo.config.SecurityConfig;
@@ -23,10 +24,14 @@ import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@SpringBootTest(properties = "app.demo.password=Test-only-password-123!")
+@SpringBootTest(properties = {
+        "app.demo.password=Test-only-password-123!",
+        "app.demo.other-password=Test-only-other-password-123!"
+})
 @AutoConfigureMockMvc
 class ApiSecurityTest {
     private static final String PASSWORD = "Test-only-password-123!";
+    private static final String OTHER_PASSWORD = "Test-only-other-password-123!";
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
     @Autowired JdbcTemplate jdbc;
@@ -45,6 +50,8 @@ class ApiSecurityTest {
     void bothDataEndpointsRequireToken() throws Exception {
         mvc.perform(get("/api/data")).andExpect(status().isUnauthorized());
         mvc.perform(post("/api/data").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"content\":\"test\"}")).andExpect(status().isUnauthorized());
+        mvc.perform(put("/api/data/" + UUID.randomUUID()).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"content\":\"test\"}")).andExpect(status().isUnauthorized());
     }
 
@@ -110,8 +117,8 @@ class ApiSecurityTest {
 
     @Test
     void usersCannotReadEachOthersNotes() throws Exception {
-        jdbc.update("INSERT INTO app_user VALUES (?, ?)", "other", passwords.encode(PASSWORD));
-        String auth = "Bearer " + login("other", PASSWORD);
+        jdbc.update("DELETE FROM note WHERE owner = ?", "other");
+        String auth = "Bearer " + login("other", OTHER_PASSWORD);
         mvc.perform(get("/api/data").header("Authorization", auth))
                 .andExpect(status().isOk()).andExpect(content().json("[]"));
         mvc.perform(post("/api/data").header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
@@ -122,10 +129,54 @@ class ApiSecurityTest {
     }
 
     @Test
+    void otherUserCannotUpdateNoteAndGetsSameResponseAsForMissingNote() throws Exception {
+        String ownerToken = login("student", PASSWORD);
+        String otherToken = login("other", OTHER_PASSWORD);
+        String created = mvc.perform(post("/api/data").header("Authorization", "Bearer " + ownerToken)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"content\":\"original\"}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        String id = JsonPath.read(created, "$.id");
+        String forbidden = mvc.perform(put("/api/data/" + id)
+                        .header("Authorization", "Bearer " + otherToken)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"content\":\"changed\"}"))
+                .andExpect(status().isNotFound()).andReturn().getResponse().getContentAsString();
+        String missing = mvc.perform(put("/api/data/" + UUID.randomUUID())
+                        .header("Authorization", "Bearer " + otherToken)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"content\":\"changed\"}"))
+                .andExpect(status().isNotFound()).andReturn().getResponse().getContentAsString();
+        assertThat(forbidden).isEqualTo(missing);
+        assertThat(jdbc.queryForObject("SELECT content FROM note WHERE id = ?", String.class, UUID.fromString(id)))
+                .isEqualTo("original");
+    }
+
+    @Test
+    void ownerCanUpdateNoteWithValidationAndEscaping() throws Exception {
+        String token = login("student", PASSWORD);
+        String created = mvc.perform(post("/api/data").header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"content\":\"original\"}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        String id = JsonPath.read(created, "$.id");
+        mvc.perform(put("/api/data/" + id).header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"content\":\"   \"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(put("/api/data/" + id).header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"content\":\"<script>1</script>\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content").value("&lt;script&gt;1&lt;/script&gt;"));
+        assertThat(jdbc.queryForObject("SELECT content FROM note WHERE id = ?", String.class, UUID.fromString(id)))
+                .isEqualTo("<script>1</script>");
+        mvc.perform(get("/api/data").header("Authorization", "Bearer " + token))
+                .andExpect(jsonPath("$[*].content", hasItem("&lt;script&gt;1&lt;/script&gt;")));
+    }
+
+    @Test
     void passwordStoredAsBcryptHash() {
-        String hash = jdbc.queryForObject("SELECT password_hash FROM app_user WHERE username = ?", String.class, "student");
-        assertThat(hash).startsWith("$2a$12$").isNotEqualTo(PASSWORD);
-        assertThat(passwords.matches(PASSWORD, hash)).isTrue();
+        for (var credentials : Map.of("student", PASSWORD, "other", OTHER_PASSWORD).entrySet()) {
+            String hash = jdbc.queryForObject("SELECT password_hash FROM app_user WHERE username = ?",
+                    String.class, credentials.getKey());
+            assertThat(hash).startsWith("$2a$12$").isNotEqualTo(credentials.getValue());
+            assertThat(passwords.matches(credentials.getValue(), hash)).isTrue();
+        }
     }
 
     @Test

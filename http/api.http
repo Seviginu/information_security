@@ -1,9 +1,8 @@
-# IntelliJ IDEA HTTP Client: запустите приложение, затем запросы сверху вниз.
-# Значения login/password должны совпадать с APP_LOGIN/APP_PASSWORD приложения.
-# После перезапуска приложения повторите запрос входа (№ 2).
 @baseUrl = http://127.0.0.1:18081
 @login = student
 @password = Local-demo-password-123!
+@otherLogin = other
+@otherPassword = Local-demo-other-password-123!
 
 ### 1. Чтение без токена — 401
 GET {{baseUrl}}/api/data
@@ -201,5 +200,87 @@ Content-Type: application/json
 > {%
     client.test("Malformed JSON: 400", function () {
         client.assert(response.status === 400);
+    });
+%}
+
+### 15. Вход вторым пользователем — 200
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+Accept: application/json
+
+{
+  "login": "{{otherLogin}}",
+  "password": "{{otherPassword}}"
+}
+
+> {%
+    client.global.clear("ibLabOtherToken");
+    client.test("Other user login: 200", function () {
+        client.assert(response.status === 200);
+        client.assert(typeof response.body.accessToken === "string");
+        client.global.set("ibLabOtherToken", response.body.accessToken);
+    });
+%}
+
+### 16. Второй пользователь не может изменить чужую заметку — 404
+PUT {{baseUrl}}/api/data/{{ibLabNoteId}}
+Authorization: Bearer {{ibLabOtherToken}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "content": "Чужое изменение"
+}
+
+> {%
+    client.test("Other user cannot edit note: 404", function () {
+        client.assert(response.status === 404);
+        client.assert(response.body.error === "Заметка не найдена");
+    });
+%}
+
+### 17. После отказа текст чужой заметки не изменился — 200
+GET {{baseUrl}}/api/data
+Authorization: Bearer {{ibLabToken}}
+Accept: application/json
+
+> {%
+    client.test("Forbidden update did not change owner's note", function () {
+        client.assert(response.status === 200);
+        const note = response.body.find(item => item.id === client.global.get("ibLabNoteId"));
+        client.assert(note !== undefined);
+        client.assert(note.content === "Заметка для проверки API");
+    });
+%}
+
+### 18. Владелец может изменить свою заметку — 200
+PUT {{baseUrl}}/api/data/{{ibLabNoteId}}
+Authorization: Bearer {{ibLabToken}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "content": "Обновлено владельцем"
+}
+
+> {%
+    client.test("Owner can edit note: 200", function () {
+        client.assert(response.status === 200);
+        client.assert(response.body.id === client.global.get("ibLabNoteId"));
+        client.assert(response.body.content === "Обновлено владельцем");
+    });
+%}
+
+### 19. Изменённая заметка читается владельцем — 200
+GET {{baseUrl}}/api/data
+Authorization: Bearer {{ibLabToken}}
+Accept: application/json
+
+> {%
+    client.test("Updated note is persisted", function () {
+        client.assert(response.status === 200);
+        const note = response.body.find(item => item.id === client.global.get("ibLabNoteId"));
+        client.assert(note !== undefined);
+        client.assert(note.content === "Обновлено владельцем");
     });
 %}

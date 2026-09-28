@@ -11,6 +11,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.util.HtmlUtils;
 
 @RestController
@@ -35,6 +36,17 @@ public class DataController {
         UUID id = UUID.randomUUID();
         jdbc.update("INSERT INTO note (id, owner, content) VALUES (?, ?, ?)",
                 id, jwt.getSubject(), request.content());
+        return response(id, request.content());
+    }
+
+    @PutMapping("/{id}")
+    public NoteResponse update(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id,
+                               @Valid @RequestBody NoteRequest request) {
+        int updated = jdbc.update("UPDATE note SET content = ? WHERE id = ? AND owner = ?",
+                request.content(), id, jwt.getSubject());
+        if (updated == 0) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        }
         return response(id, request.content());
     }
 
